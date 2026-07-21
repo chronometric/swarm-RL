@@ -45,7 +45,7 @@ def deploy_model(model_path: Path) -> None:
     )
     model.save(str(dest), exclude=["optimizer"])
     size_mb = dest.stat().st_size / (1024 * 1024)
-    print(f"Deployed {model_path} → {dest} ({size_mb:.1f} MiB, optimizer stripped)")
+    print(f"Deployed {model_path} → {dest} ({size_mb:.1f} MiB, hybrid agent, optimizer stripped)")
     if dest.stat().st_size > 50 * 1024 * 1024:
         raise SystemExit(
             f"Submission too large ({size_mb:.1f} MiB > 50 MiB). "
@@ -59,6 +59,11 @@ def main():
     parser.add_argument("--benchmark", action="store_true", help="Run swarm benchmark after packaging")
     parser.add_argument("--seeds-per-group", type=int, default=1, help="Benchmark seeds per env type")
     parser.add_argument("--workers", type=int, default=2, help="Benchmark Docker workers")
+    parser.add_argument(
+        "--hybrid",
+        action="store_true",
+        help="Deploy hybrid controller (heuristic cruise + RL landing)",
+    )
     args = parser.parse_args()
 
     if not args.model.exists():

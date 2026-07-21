@@ -11,7 +11,13 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from RL.validate import evaluate_model, load_recurrent_model, rollout_episode
+from RL.validate import (
+    evaluate_hybrid_model,
+    evaluate_model,
+    load_recurrent_model,
+    rollout_episode,
+    rollout_episode_hybrid,
+)
 from swarm.constants import SIM_DT
 from swarm.validator.task_gen import task_for_seed_and_type
 
@@ -22,11 +28,14 @@ def main():
     parser.add_argument("--seed", type=int, action="append", default=[2002002, 10012, 10033, 10052])
     parser.add_argument("--type", type=int, default=2, help="Challenge type (2=open)")
     parser.add_argument("--all-types", action="store_true", help="Run fixed validation seeds for all env types")
+    parser.add_argument("--hybrid", action="store_true", help="Heuristic cruise + RL landing (deployment mode)")
+    parser.add_argument("--handoff-m", type=float, default=8.0)
     args = parser.parse_args()
 
     model = load_recurrent_model(args.model)
     if args.all_types:
-        result = evaluate_model(model, challenge_types=None)
+        eval_fn = evaluate_hybrid_model if args.hybrid else evaluate_model
+        result = eval_fn(model, challenge_types=None, handoff_m=args.handoff_m) if args.hybrid else eval_fn(model)
         print(result.summary_line())
         for ep in result.episodes:
             print(
@@ -35,10 +44,13 @@ def main():
             )
         return
 
-    print(f"Model: {args.model}")
+    print(f"Model: {args.model}" + (" [HYBRID]" if args.hybrid else ""))
     for seed in args.seed:
         task = task_for_seed_and_type(sim_dt=SIM_DT, seed=seed, challenge_type=args.type)
-        ep = rollout_episode(model, task)
+        if args.hybrid:
+            ep = rollout_episode_hybrid(model, task, handoff_m=args.handoff_m)
+        else:
+            ep = rollout_episode(model, task)
         print(
             f"  seed={seed} dist={ep['distance_to_goal']:.1f}m "
             f"success={ep['success']} score={ep['score']:.4f}"

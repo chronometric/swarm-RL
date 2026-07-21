@@ -1,0 +1,10 @@
+{
+  "episodes": 512,
+  "transitions": 279377,
+  "success_rate": 0.001953125,
+  "distance_range": [
+    4.0,
+    12.0
+  ],
+  "mean_final_dist": 10.353739956772467
+}

@@ -10,7 +10,8 @@ from typing import Any, Optional, Sequence
 import numpy as np
 
 from RL.action_utils import prepare_swarm_action
-from RL.env_utils import CHALLENGE_NAMES, DEFAULT_VAL_SEEDS, validation_tasks
+from RL.env_utils import CHALLENGE_NAMES, DEFAULT_VAL_SEEDS, OPEN_BENCHMARK_SEEDS, validation_tasks
+from RL.hybrid_controller import HybridController, HybridConfig
 from RL.policy_net import load_swarm_depth_cnn_class
 from swarm.utils.env_factory import make_env
 
@@ -71,6 +72,15 @@ def rollout_episode(model, task, *, gui: bool = False, deterministic: bool = Tru
             )
             episode_start = np.zeros((1,), dtype=bool)
             act = prepare_swarm_action(action, env)
+            if not np.all(np.isfinite(act)):
+                return {
+                    "challenge_type": int(task.challenge_type),
+                    "map_seed": int(task.map_seed),
+                    "score": 0.01,
+                    "success": False,
+                    "collision": True,
+                    "distance_to_goal": float(info.get("distance_to_goal", 999.0)),
+                }
             obs, _reward, terminated, truncated, info = env.step(act)
             done = bool(terminated or truncated)
 
@@ -85,6 +95,113 @@ def rollout_episode(model, task, *, gui: bool = False, deterministic: bool = Tru
         }
     finally:
         env.close()
+
+
+def rollout_episode_hybrid(
+    model,
+    task,
+    *,
+    gui: bool = False,
+    handoff_m: float = 8.0,  # kept for CLI compat; spiral search ignores it
+    heuristic_speed: float = 0.55,
+    use_rl_land: bool = True,
+) -> dict[str, Any]:
+    """Full mission: spiral disk-search + soft-land (+ optional RL land assist)."""
+    env = make_env(task, gui=gui)
+    controller = HybridController(
+        model,
+        config=HybridConfig(
+            use_rl_land=use_rl_land,
+            cruise_speed=heuristic_speed,
+            search_enter_m=max(8.0, float(handoff_m)),
+            deterministic=True,
+        ),
+    )
+    try:
+        obs, info = env.reset(seed=int(task.map_seed))
+        controller.reset()
+        done = False
+        while not done:
+            act = prepare_swarm_action(controller.act(obs), env)
+            if not np.all(np.isfinite(act)):
+                return {
+                    "challenge_type": int(task.challenge_type),
+                    "map_seed": int(task.map_seed),
+                    "score": 0.01,
+                    "success": False,
+                    "collision": True,
+                    "distance_to_goal": float(info.get("distance_to_goal", 999.0)),
+                }
+            obs, _reward, terminated, truncated, info = env.step(act)
+            done = bool(terminated or truncated)
+        return {
+            "challenge_type": int(task.challenge_type),
+            "map_seed": int(task.map_seed),
+            "score": float(info.get("score", 0.0)),
+            "success": bool(info.get("success", False)),
+            "collision": bool(info.get("collision", False)),
+            "distance_to_goal": float(info.get("distance_to_goal", 0.0)),
+        }
+    finally:
+        env.close()
+
+
+def evaluate_hybrid_model(
+    model,
+    *,
+    challenge_types: Optional[Sequence[int]] = None,
+    seeds: Optional[dict[int, int]] = None,
+    gui: bool = False,
+    handoff_m: float = 8.0,
+) -> ValidationResult:
+    """Validator-faithful eval with hybrid cruise + RL landing."""
+    tasks = validation_tasks(seeds=seeds, challenge_types=challenge_types)
+    episodes = [
+        rollout_episode_hybrid(model, task, gui=gui, handoff_m=handoff_m)
+        for _, task in tasks
+    ]
+    per_type: dict[str, list[float]] = {}
+    per_type_success: dict[str, list[bool]] = {}
+    for ep in episodes:
+        name = CHALLENGE_NAMES.get(ep["challenge_type"], str(ep["challenge_type"]))
+        per_type.setdefault(name, []).append(ep["score"])
+        per_type_success.setdefault(name, []).append(ep["success"])
+    all_scores = [ep["score"] for ep in episodes]
+    all_success = [ep["success"] for ep in episodes]
+    return ValidationResult(
+        mean_score=float(np.mean(all_scores)) if all_scores else 0.0,
+        success_rate=float(np.mean(all_success)) if all_success else 0.0,
+        per_type={k: float(np.mean(v)) for k, v in per_type.items()},
+        per_type_success={k: float(np.mean(v)) for k, v in per_type_success.items()},
+        episodes=episodes,
+    )
+
+
+def evaluate_hybrid_open_benchmark(
+    model,
+    *,
+    seeds: Sequence[int] | None = None,
+    gui: bool = False,
+    handoff_m: float = 8.0,
+) -> ValidationResult:
+    """Hybrid eval on multiple fixed open-terrain seeds (landing progress metric)."""
+    from swarm.constants import SIM_DT
+    from swarm.validator.task_gen import task_for_seed_and_type
+
+    seed_list = list(seeds or OPEN_BENCHMARK_SEEDS)
+    episodes = []
+    for seed in seed_list:
+        task = task_for_seed_and_type(sim_dt=SIM_DT, seed=seed, challenge_type=2)
+        episodes.append(rollout_episode_hybrid(model, task, gui=gui, handoff_m=handoff_m))
+    all_scores = [ep["score"] for ep in episodes]
+    all_success = [ep["success"] for ep in episodes]
+    return ValidationResult(
+        mean_score=float(np.mean(all_scores)) if all_scores else 0.0,
+        success_rate=float(np.mean(all_success)) if all_success else 0.0,
+        per_type={"open": float(np.mean(all_scores)) if all_scores else 0.0},
+        per_type_success={"open": float(np.mean(all_success)) if all_success else 0.0},
+        episodes=episodes,
+    )
 
 
 def evaluate_model(

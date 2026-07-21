@@ -16,10 +16,17 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from RL.env_utils import CURRICULUM, make_training_env_fn
-from RL.policy_net import load_swarm_depth_cnn_class
+from RL.env_utils import CURRICULUM, make_landing_env_fn, make_training_env_fn
 from RL.train_sota import _build_model, _wrap_env
-from RL.wrappers import SwarmActionWrapper
+from RL.wrappers import LandingFocusedWrapper, SwarmActionWrapper, StateNoiseWrapper, EpisodeScoreWrapper
+
+
+def _wrap_landing_env(raw_env):
+    env = SwarmActionWrapper(raw_env)
+    env = LandingFocusedWrapper(env)
+    env = StateNoiseWrapper(env, std=0.0)
+    env = EpisodeScoreWrapper(env)
+    return env
 
 
 def _load_demos(path: Path):
@@ -50,6 +57,7 @@ def pretrain_bc(
     batch_size: int = 256,
     lr: float = 3e-4,
     device: str = "cpu",
+    landing: bool = False,
 ) -> Path:
     depth, state, actions = _load_demos(demos_path)
     n = len(actions)
@@ -58,11 +66,25 @@ def pretrain_bc(
     stage = CURRICULUM[0]
 
     def factory():
+        if landing:
+            raw = make_landing_env_fn(stage)()
+            return _wrap_landing_env(raw)
         raw = SwarmActionWrapper(make_training_env_fn(stage)())
         return _wrap_env(raw, state_noise=0.0)
 
     vec_env = DummyVecEnv([factory])
-    model = _build_model(vec_env, learning_rate=lr, n_steps=512, batch_size=batch_size, device=device)
+    model = _build_model(
+        vec_env,
+        learning_rate=lr,
+        n_steps=512,
+        batch_size=batch_size,
+        device=device,
+        ent_coef=0.01,
+        clip_range=0.2,
+        n_epochs=4,
+        target_kl=None,
+        tensorboard_log=None,
+    )
     policy = model.policy
     optimizer = torch.optim.Adam(policy.parameters(), lr=lr)
 
@@ -108,17 +130,24 @@ def main():
     parser.add_argument("--epochs", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--device", type=str, default="auto")
+    parser.add_argument(
+        "--landing",
+        action="store_true",
+        help="Use landing env factory (auto-enabled when demos path contains 'landing')",
+    )
     args = parser.parse_args()
 
     device = "cuda" if args.device == "auto" and torch.cuda.is_available() else (
         "cpu" if args.device == "auto" else args.device
     )
+    landing = args.landing or "landing" in args.demos.stem.lower()
     pretrain_bc(
         args.demos,
         args.out,
         epochs=args.epochs,
         batch_size=args.batch_size,
         device=device,
+        landing=landing,
     )
 
 
