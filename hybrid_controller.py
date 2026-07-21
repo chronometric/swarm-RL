@@ -21,8 +21,9 @@ def horizontal_dist_to_search(observation: dict) -> float:
 
 @dataclass
 class HybridConfig:
-    # Spiral search is primary. RL only assists during LAND if enabled.
-    use_rl_land: bool = True
+    # Spiral search + surface refine is primary. RL land assist often destabilizes
+    # an already-good soft-land (tilt/collision), so it is off by default.
+    use_rl_land: bool = False
     rl_land_alt_m: float = 3.5  # engage RL soft-assist when altitude ray below this
     cruise_speed: float = 0.55
     search_enter_m: float = 10.0
@@ -83,9 +84,9 @@ class HybridController:
                     if not np.all(np.isfinite(rl_action)):
                         raise ValueError("non-finite RL action")
                     rl_action[3] = float(np.clip(rl_action[3], 0.0, 1.0))
-                    # Blend: prefer low thrust / soft descent from heuristic.
-                    out = 0.55 * soft_land_action(observation, target_xy=self.pilot._pad_xy) + 0.45 * rl_action[:5]
-                    out[3] = float(np.clip(min(out[3], 0.35), 0.0, 1.0))
+                    # BC/RL carries the true-pad land skill; soft-land only stabilizes thrust/tilt.
+                    out = 0.35 * soft_land_action(observation, target_xy=self.pilot._pad_xy) + 0.65 * rl_action[:5]
+                    out[3] = float(np.clip(min(out[3], 0.32), 0.0, 1.0))
                     return out
                 except (ValueError, RuntimeError):
                     self._using_rl = False

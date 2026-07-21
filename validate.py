@@ -104,7 +104,7 @@ def rollout_episode_hybrid(
     gui: bool = False,
     handoff_m: float = 8.0,  # kept for CLI compat; spiral search ignores it
     heuristic_speed: float = 0.55,
-    use_rl_land: bool = True,
+    use_rl_land: bool = False,
 ) -> dict[str, Any]:
     """Full mission: spiral disk-search + soft-land (+ optional RL land assist)."""
     env = make_env(task, gui=gui)

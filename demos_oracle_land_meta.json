@@ -1,0 +1,8 @@
+{
+  "tried": 300,
+  "kept": 240,
+  "successes": 240,
+  "transitions": 277241,
+  "success_rate_among_kept": 1.0,
+  "mean_final_dist": 0.1475830591590995
+}
