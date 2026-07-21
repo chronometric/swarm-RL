@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
-End-to-end miner pipeline: deploy model → package → quick benchmark.
+End-to-end miner pipeline: deploy model → package → optional benchmark.
 
 Usage:
   source miner_env/bin/activate
   python RL/run_pipeline.py --model RL/checkpoints/.../best/best_model.zip
-  python RL/run_pipeline.py --model ... --benchmark --seeds-per-group 1
+  python RL/run_pipeline.py --model ... --benchmark --seeds-per-group 2
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -18,11 +19,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 MY_AGENT = ROOT / "my_agent"
 SUBMISSION = ROOT / "Submission" / "submission.zip"
+DEFAULT_BENCH_LOG = Path("/tmp/bench_full_eval.log")
 
 
-def _run(cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess:
+def _run(cmd: list[str], *, check: bool = True, env: dict | None = None) -> subprocess.CompletedProcess:
     print(f"\n$ {' '.join(cmd)}\n")
-    return subprocess.run(cmd, cwd=ROOT, check=check)
+    merged = os.environ.copy()
+    if env:
+        merged.update(env)
+    return subprocess.run(cmd, cwd=ROOT, check=check, env=merged)
 
 
 def deploy_model(model_path: Path) -> None:
@@ -49,20 +54,36 @@ def deploy_model(model_path: Path) -> None:
     if dest.stat().st_size > 50 * 1024 * 1024:
         raise SystemExit(
             f"Submission too large ({size_mb:.1f} MiB > 50 MiB). "
-            "Retrain with normalized_image=True (see RL/train_sota.py) or reduce net size."
+            "Retrain with a smaller net or strip more state."
         )
 
 
 def main():
     parser = argparse.ArgumentParser(description="Package and benchmark Swarm miner agent")
     parser.add_argument("--model", type=Path, required=True, help="RecurrentPPO checkpoint .zip")
-    parser.add_argument("--benchmark", action="store_true", help="Run swarm benchmark after packaging")
+    parser.add_argument("--benchmark", action="store_true", help="Run swarm Docker benchmark after packaging")
     parser.add_argument("--seeds-per-group", type=int, default=1, help="Benchmark seeds per env type")
     parser.add_argument("--workers", type=int, default=2, help="Benchmark Docker workers")
     parser.add_argument(
         "--hybrid",
         action="store_true",
-        help="Deploy hybrid controller (heuristic cruise + RL landing)",
+        help="(compat) Hybrid controller is always deployed from my_agent/drone_agent.py",
+    )
+    parser.add_argument(
+        "--strict-lockdown",
+        action="store_true",
+        help="Require Docker network lockdown (needs root/CAP_NET_ADMIN). Default: skip for local bench.",
+    )
+    parser.add_argument(
+        "--log-out",
+        type=Path,
+        default=DEFAULT_BENCH_LOG,
+        help=f"Benchmark log path (default: {DEFAULT_BENCH_LOG})",
+    )
+    parser.add_argument(
+        "--local-check",
+        action="store_true",
+        help="Also run fast local hybrid check_progress before Docker benchmark",
     )
     args = parser.parse_args()
 
@@ -80,14 +101,52 @@ def main():
     ])
     _run([sys.executable, "-m", "swarm", "model", "verify", "--model", str(SUBMISSION)])
 
-    if args.benchmark:
+    if args.local_check:
         _run([
-            sys.executable, "-m", "swarm", "benchmark",
-            "--model", str(SUBMISSION),
-            "--seeds-per-group", str(args.seeds_per_group),
-            "--workers", str(args.workers),
-        ])
-        _run([sys.executable, "-m", "swarm", "report"])
+            sys.executable,
+            "RL/check_progress.py",
+            "--model",
+            str(args.model),
+            "--hybrid",
+        ], check=False)
+
+    if args.benchmark:
+        bench_env = {}
+        if not args.strict_lockdown:
+            # Local machines often lack nsenter/iptables privileges; without this
+            # every seed fails with network_lockdown_failed and simT=0.
+            bench_env["SWARM_SKIP_NETWORK_LOCKDOWN"] = "1"
+            print(
+                "\n[pipeline] SWARM_SKIP_NETWORK_LOCKDOWN=1 "
+                "(local Docker bench). Use --strict-lockdown on a root-capable host.\n"
+            )
+        args.log_out.parent.mkdir(parents=True, exist_ok=True)
+        _run(
+            [
+                sys.executable,
+                "-m",
+                "swarm",
+                "benchmark",
+                "--model",
+                str(SUBMISSION),
+                "--seeds-per-group",
+                str(args.seeds_per_group),
+                "--workers",
+                str(args.workers),
+                "--log-out",
+                str(args.log_out),
+            ],
+            env=bench_env,
+        )
+        report = _run(
+            [sys.executable, "-m", "swarm", "report", "--input", str(args.log_out)],
+            check=False,
+        )
+        if report.returncode != 0:
+            print(
+                f"\n[pipeline] report failed (exit {report.returncode}). "
+                f"Inspect log: {args.log_out}\n"
+            )
 
     print(f"\n✅ Pipeline complete. Submission: {SUBMISSION}")
     print("Register on-chain only when benchmark scores consistently beat the champion.")
