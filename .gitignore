@@ -1,6 +1,11 @@
 __pycache__/
-checkpoints/
+*.shards/
 runs/
+archive/
 *.npz
-*.md
-*.sh
+checkpoints/**
+!checkpoints/landing_v2/
+!checkpoints/landing_v2/**
+!checkpoints/bc_oracle_v6.zip
+!checkpoints/pad_estimator.pt
+!checkpoints/pad_estimator.json

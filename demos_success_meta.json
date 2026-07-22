@@ -1,9 +1,0 @@
-{
-  "tried": 400,
-  "kept": 1,
-  "successes": 1,
-  "transitions": 256,
-  "success_rate_among_kept": 1.0,
-  "mean_final_dist": 0.6700274969478018,
-  "model": "RL/checkpoints/landing_v2/best/best_model.zip"
-}

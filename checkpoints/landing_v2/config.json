@@ -1,0 +1,31 @@
+{
+  "timesteps": 1000000,
+  "eval_freq": 8000,
+  "checkpoint_freq": 16000,
+  "n_steps": 256,
+  "batch_size": 128,
+  "lr": 1e-05,
+  "ent_coef": 0.008,
+  "clip_range": 0.08,
+  "n_epochs": 4,
+  "target_kl": 0.02,
+  "state_noise": 0.01,
+  "handoff_m": 8.0,
+  "full_episode_ratio": 0.05,
+  "distance_min": 4.0,
+  "distance_max": 12.0,
+  "freeze_encoder": false,
+  "stage": "open",
+  "device": "cuda",
+  "resume": "RL/checkpoints/bc_landing_v2.zip",
+  "run_name": "landing_v2",
+  "demos_path": "/home/ubuntu/workspace/swarm/RL/demos_landing.npz",
+  "no_bc_anchor": false,
+  "distance_range": [
+    4.0,
+    12.0
+  ],
+  "tensorboard_log": "/home/ubuntu/workspace/swarm/RL/checkpoints/landing_v2/tb",
+  "training_mode": "landing_specialist",
+  "eval_mode": "hybrid"
+}
