@@ -105,8 +105,11 @@ def rollout_episode_hybrid(
     handoff_m: float = 8.0,  # kept for CLI compat; spiral search ignores it
     heuristic_speed: float = 0.55,
     use_rl_land: bool = False,
+    pad_estimator_path=None,
 ) -> dict[str, Any]:
-    """Full mission: spiral disk-search + soft-land (+ optional RL land assist)."""
+    """Full mission: spiral disk-search + pad estimator + soft-land."""
+    from pathlib import Path
+
     env = make_env(task, gui=gui)
     controller = HybridController(
         model,
@@ -115,6 +118,7 @@ def rollout_episode_hybrid(
             cruise_speed=heuristic_speed,
             search_enter_m=max(8.0, float(handoff_m)),
             deterministic=True,
+            pad_estimator_path=Path(pad_estimator_path) if pad_estimator_path else None,
         ),
     )
     try:
@@ -153,11 +157,18 @@ def evaluate_hybrid_model(
     seeds: Optional[dict[int, int]] = None,
     gui: bool = False,
     handoff_m: float = 8.0,
+    pad_estimator_path=None,
 ) -> ValidationResult:
-    """Validator-faithful eval with hybrid cruise + RL landing."""
+    """Validator-faithful eval with hybrid cruise + pad estimator + soft-land."""
     tasks = validation_tasks(seeds=seeds, challenge_types=challenge_types)
     episodes = [
-        rollout_episode_hybrid(model, task, gui=gui, handoff_m=handoff_m)
+        rollout_episode_hybrid(
+            model,
+            task,
+            gui=gui,
+            handoff_m=handoff_m,
+            pad_estimator_path=pad_estimator_path,
+        )
         for _, task in tasks
     ]
     per_type: dict[str, list[float]] = {}

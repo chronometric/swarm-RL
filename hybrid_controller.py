@@ -1,4 +1,4 @@
-"""Hybrid deployment: spiral disk-search (primary) + optional RL soft-assist."""
+"""Hybrid deployment: spiral disk-search + pad estimator + soft-land (RL assist off)."""
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ from typing import Any, Optional
 import numpy as np
 
 from RL.search_pilot import PilotPhase, SearchLandPilot, soft_land_action
+
+DEFAULT_PAD_ESTIMATOR = Path("RL/checkpoints/pad_estimator.pt")
 
 
 def horizontal_dist_to_search(observation: dict) -> float:
@@ -21,30 +23,45 @@ def horizontal_dist_to_search(observation: dict) -> float:
 
 @dataclass
 class HybridConfig:
-    # Spiral search + surface refine is primary. RL land assist often destabilizes
-    # an already-good soft-land (tilt/collision), so it is off by default.
+    # Spiral search + pad estimator + soft-land. RL land assist off by default.
     use_rl_land: bool = False
-    rl_land_alt_m: float = 3.5  # engage RL soft-assist when altitude ray below this
+    rl_land_alt_m: float = 3.5
     cruise_speed: float = 0.55
     search_enter_m: float = 10.0
     deterministic: bool = True
+    pad_estimator_path: Optional[Path] = None
+    pad_estimator_device: str = "cpu"
 
 
 class HybridController:
     """
-    Most reliable Swarm Stage-0 controller:
+    Stage-0 controller:
 
-      1. SearchLandPilot cruise + spiral disk search finds the elevated pad
-      2. Soft-land heuristic completes touchdown
-      3. Optional: RL predicts action when very close / low altitude (assist only)
-
-    LSTM is reset when entering the land phase.
+      1. SearchLandPilot cruise + spiral
+      2. Pad estimator locks pad XY when confident
+      3. Soft-land heuristic completes touchdown
+      4. Optional RL assist (off by default — often hurts)
     """
 
     def __init__(self, model, *, config: Optional[HybridConfig] = None):
         self.model = model
         self.config = config or HybridConfig()
-        self.pilot = SearchLandPilot(cruise_speed=self.config.cruise_speed, search_enter_m=self.config.search_enter_m)
+        pad_model = None
+        device = self.config.pad_estimator_device
+        path = self.config.pad_estimator_path
+        if path is None and DEFAULT_PAD_ESTIMATOR.exists():
+            path = DEFAULT_PAD_ESTIMATOR
+        if path is not None and Path(path).exists():
+            from RL.pad_estimator import load_pad_estimator
+
+            pad_model = load_pad_estimator(path, device=device)
+            print(f"[hybrid] pad estimator loaded: {path}")
+        self.pilot = SearchLandPilot(
+            cruise_speed=self.config.cruise_speed,
+            search_enter_m=self.config.search_enter_m,
+            pad_estimator=pad_model,
+            pad_estimator_device=device,
+        )
         self._lstm_states: Any = None
         self._episode_start = np.ones((1,), dtype=bool)
         self._using_rl = False
@@ -59,7 +76,6 @@ class HybridController:
         cfg = self.config
         base = self.pilot.act(observation)
 
-        # Only consider RL assist after pad lock (LAND phase) and when low.
         if (
             cfg.use_rl_land
             and self.pilot.phase == PilotPhase.LAND
@@ -84,8 +100,9 @@ class HybridController:
                     if not np.all(np.isfinite(rl_action)):
                         raise ValueError("non-finite RL action")
                     rl_action[3] = float(np.clip(rl_action[3], 0.0, 1.0))
-                    # BC/RL carries the true-pad land skill; soft-land only stabilizes thrust/tilt.
-                    out = 0.35 * soft_land_action(observation, target_xy=self.pilot._pad_xy) + 0.65 * rl_action[:5]
+                    out = 0.35 * soft_land_action(
+                        observation, target_xy=self.pilot._pad_xy
+                    ) + 0.65 * rl_action[:5]
                     out[3] = float(np.clip(min(out[3], 0.32), 0.0, 1.0))
                     return out
                 except (ValueError, RuntimeError):
@@ -101,8 +118,9 @@ class HybridController:
 def load_hybrid_controller(
     checkpoint: Path,
     *,
-    use_rl_land: bool = True,
+    use_rl_land: bool = False,
     device: str | None = None,
+    pad_estimator_path: Path | None = None,
 ) -> HybridController:
     from sb3_contrib import RecurrentPPO
 
@@ -114,4 +132,11 @@ def load_hybrid_controller(
         custom_objects={"SwarmDepthCNN": SwarmDepthCNN},
         device=device or "auto",
     )
-    return HybridController(model, config=HybridConfig(use_rl_land=use_rl_land))
+    return HybridController(
+        model,
+        config=HybridConfig(
+            use_rl_land=use_rl_land,
+            pad_estimator_path=pad_estimator_path,
+            pad_estimator_device="cpu",
+        ),
+    )

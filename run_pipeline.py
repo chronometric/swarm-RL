@@ -30,9 +30,10 @@ def _run(cmd: list[str], *, check: bool = True, env: dict | None = None) -> subp
     return subprocess.run(cmd, cwd=ROOT, check=check, env=merged)
 
 
-def deploy_model(model_path: Path) -> None:
+def deploy_model(model_path: Path, *, pad_estimator: Path | None = None) -> None:
     """Copy checkpoint to my_agent/, stripping optimizer state to stay under 50 MiB."""
     import importlib.util
+    import shutil
 
     from sb3_contrib import RecurrentPPO
 
@@ -51,6 +52,19 @@ def deploy_model(model_path: Path) -> None:
     model.save(str(dest), exclude=["optimizer"])
     size_mb = dest.stat().st_size / (1024 * 1024)
     print(f"Deployed {model_path} → {dest} ({size_mb:.1f} MiB, hybrid agent, optimizer stripped)")
+
+    pad_src = pad_estimator
+    if pad_src is None:
+        candidate = ROOT / "RL" / "checkpoints" / "pad_estimator.pt"
+        if candidate.exists():
+            pad_src = candidate
+    if pad_src is not None and Path(pad_src).exists():
+        pad_dst = MY_AGENT / "pad_estimator.pt"
+        shutil.copy2(pad_src, pad_dst)
+        print(f"Deployed pad estimator {pad_src} → {pad_dst} ({pad_dst.stat().st_size / 1024:.1f} KiB)")
+    else:
+        print("[warn] no pad_estimator.pt found — packaging spiral-only agent")
+
     if dest.stat().st_size > 50 * 1024 * 1024:
         raise SystemExit(
             f"Submission too large ({size_mb:.1f} MiB > 50 MiB). "
@@ -85,12 +99,18 @@ def main():
         action="store_true",
         help="Also run fast local hybrid check_progress before Docker benchmark",
     )
+    parser.add_argument(
+        "--pad-estimator",
+        type=Path,
+        default=Path("RL/checkpoints/pad_estimator.pt"),
+        help="Pad XY estimator .pt to include in my_agent/",
+    )
     args = parser.parse_args()
 
     if not args.model.exists():
         raise SystemExit(f"Model not found: {args.model}")
 
-    deploy_model(args.model)
+    deploy_model(args.model, pad_estimator=args.pad_estimator if args.pad_estimator.exists() else None)
 
     _run([sys.executable, "-m", "swarm", "model", "test", "--source", str(MY_AGENT)])
     _run([

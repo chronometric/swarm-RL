@@ -30,12 +30,27 @@ def main():
     parser.add_argument("--all-types", action="store_true", help="Run fixed validation seeds for all env types")
     parser.add_argument("--hybrid", action="store_true", help="Heuristic cruise + RL landing (deployment mode)")
     parser.add_argument("--handoff-m", type=float, default=8.0)
+    parser.add_argument(
+        "--pad-estimator",
+        type=Path,
+        default=Path("RL/checkpoints/pad_estimator.pt"),
+        help="Pad XY estimator checkpoint (used when present)",
+    )
+    parser.add_argument("--no-pad-estimator", action="store_true", help="Disable pad estimator even if file exists")
     args = parser.parse_args()
+
+    pad_path = None if args.no_pad_estimator else args.pad_estimator
+    if pad_path is not None and not pad_path.exists():
+        print(f"[warn] pad estimator not found at {pad_path} — running without it")
+        pad_path = None
 
     model = load_recurrent_model(args.model)
     if args.all_types:
         eval_fn = evaluate_hybrid_model if args.hybrid else evaluate_model
-        result = eval_fn(model, challenge_types=None, handoff_m=args.handoff_m) if args.hybrid else eval_fn(model)
+        if args.hybrid:
+            result = eval_fn(model, challenge_types=None, handoff_m=args.handoff_m, pad_estimator_path=pad_path)
+        else:
+            result = eval_fn(model)
         print(result.summary_line())
         for ep in result.episodes:
             print(
@@ -44,11 +59,11 @@ def main():
             )
         return
 
-    print(f"Model: {args.model}" + (" [HYBRID]" if args.hybrid else ""))
+    print(f"Model: {args.model}" + (" [HYBRID]" if args.hybrid else "") + (f" [PAD={pad_path}]" if pad_path else ""))
     for seed in args.seed:
         task = task_for_seed_and_type(sim_dt=SIM_DT, seed=seed, challenge_type=args.type)
         if args.hybrid:
-            ep = rollout_episode_hybrid(model, task, handoff_m=args.handoff_m)
+            ep = rollout_episode_hybrid(model, task, handoff_m=args.handoff_m, pad_estimator_path=pad_path)
         else:
             ep = rollout_episode(model, task)
         print(

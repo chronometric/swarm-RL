@@ -1,0 +1,8 @@
+{
+  "episodes": 400,
+  "transitions": 1017553,
+  "successes": 2,
+  "mean_frame_goal_dist": 8.185136795043945,
+  "mean_final_dist": 8.573570541543512,
+  "success_rate": 0.005
+}
